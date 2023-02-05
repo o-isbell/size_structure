@@ -1,0 +1,2040 @@
+---
+title: "size_structure"
+author: "Olivia Isbell"
+date: '2022-06-06'
+output: html_document
+---
+##Set up chunk 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse) 
+library(here)
+library(janitor)
+library(sf)
+library(sp)
+library(raster)
+library(readxl)
+library(car)
+
+
+library(sciplot)
+library(plotrix) # std.errror
+
+#spatial 
+library(rgdal)
+library(tmap)
+
+select<- dplyr::select
+```
+
+##Load data frames
+```{r load data frames}
+coral_data <- read_csv("coral_data.csv")
+pnt_cont <- read_csv("contact_data.csv")
+```
+
+## Working through point contact data
+
+-   placed contact data into sub-categories
+
+```{r point contact data}
+
+## check to make sure data is all good and we have the right # of points for each site 
+point_cont <- pnt_cont %>% 
+  clean_names() %>% 
+  #select() %>% 
+  group_by(site) %>% 
+  summarize(total = n()) %>% 
+  filter( site != "167") %>% 
+  filter(site != "?")
+
+### puts contacts into bins
+contact_prop <- pnt_cont %>% 
+  filter( site != "167") %>% 
+  filter(site != "?") %>% 
+  mutate(contact_bins = case_when(
+    contact %in% c("A" , "Ah", "Aho","Ar","Acy","Av", "An", "Ap", "Al","As", "Ar") ~ "Acropora",
+    contact %in% c("T","Dc", "H", "Lb","Sp","Rs", "velvet", "Am", "Lb", "Sa") ~ "Macroalgae",
+    contact %in% c("Ph", "Pl","Pr", "M", "Pav", "Pc", "C") ~ "Other Coral",
+    contact == "P" ~ "Pocillopora",
+    contact == "Tf" ~ "Turf",
+    contact == "Cca"~ "Cca",
+    contact == "D" ~ "Dead Coral",
+    contact == "Hs" ~ "Hard Substrate",
+    contact == "R" ~ "Rubble",
+    contact == "Hy" ~ "Hydroids",
+    contact == "S" ~ "Sand"
+    )) 
+  
+```
+
+### Contact data wrangling
+
+-   table of proportions for contact data for each plot and rearranged table for contacts to have their own column 
+
+```{r point contact data}
+#### CONTACT PER PLOT VS JUVENILES
+## proportion of contact for each plot at each site 
+contact_table_plot <- contact_prop %>% 
+   group_by(site,plot) %>% 
+  count(contact_bins) %>% 
+  mutate(total_plot = sum(n), 
+         prop = n / total_plot,
+         percent = prop *100)
+
+## made table wider 
+contact_wide_plot <- contact_table_plot %>% 
+  select(-n, - total_plot, -prop) %>% 
+  spread( contact_bins, percent, fill = NA, convert = FALSE)  %>% 
+  select(-14) %>% 
+  clean_names()
+
+## made plot variable as character 
+contact_wide_plot$plot <- as.character(contact_wide_plot$plot)
+
+## lm exploring juv and contact data 
+# juv_md1 <- lm(data = juv_contact_join_plot, n_juv ~ acropora )
+# summary(juv_md1)
+```
+
+### Contact proportions per per site 
+and turned to wide so we can use with other data 
+```{r}
+## proportion for each site (totals)
+contact_table_site <- contact_prop %>% 
+  group_by(site) %>% 
+  count(contact_bins) %>% 
+  mutate(total_plot = sum(n),
+         avg = n/5,  #5 plots
+         prop = n / total_plot,
+         percent = prop *100) 
+
+## made table wider 
+contact_wide <- contact_table_site %>% 
+  select(-n, - total_plot, -avg, -prop) %>% 
+  spread( contact_bins, percent, fill = NA, convert = FALSE)  %>% 
+  select(-13) %>% 
+  clean_names()
+```
+
+```{r point contact data percentage table - extra/not using}
+prop.table(table(contact_prop$contact))
+count_table <- count(contact_table$Var1)
+  
+  
+  # group_by(site) %>% 
+  # summarize(mean = mean(macroalge))
+  #select(-NA_) ## one na in 171 (weird?)
+
+counts <- contact_prop %>%  
+  janitor::adorn_percentages() %>% #default is to calculate proportions by rows (can change to columns too)
+  janitor::adorn_pct_formatting(digits = 2) %>% #now want to is there a sig diff for broken or whole across the diff sites 
+  janitor::adorn_ns() 
+
+point_contact_perc <- df(data = counts, )
+
+ggplot(data = contact_prop , aes(x = site, y = macroalgae) ) + 
+  geom_col() + 
+  theme_classic()
+
+ggplot(data = contact_prop , aes(x = site, y = hard_substrate) ) + 
+  geom_col() + 
+  theme_classic()
+
+ggplot(data = contact_prop , aes(x = site, y = sand) ) + 
+  geom_col() + 
+  theme_classic()
+
+ggplot(data = contact_prop , aes(x = site, y = rubble) ) + 
+  geom_col() + 
+  theme_classic()
+
+```
+
+## Using coral data
+
+```{r coral data}
+
+## cleaned up data 
+coral_clean <-coral_data %>% 
+  clean_names() %>%  # clean names 
+  select(length, width, genus, species, b_location, site, plot, garden, lat, long)
+
+coral_clean$site <- as.character(coral_clean$site)
+coral_clean$plot <- as.character(coral_clean$plot)
+
+## more cleaning and added "longest" column 
+size_bins <- coral_clean %>%  
+  filter(genus %in% c("acr","poc")) %>% 
+  mutate(longest = pmax(width, length)) 
+  
+## looking at the average longest length of corals at each site 
+# with garden variable
+general_size_bins_plot <- size_bins %>% 
+  filter(site != "167") %>% 
+  filter(garden != "NA") %>% 
+  filter(plot != "6") %>% 
+  group_by(site, plot, genus) %>% 
+  summarize(mean_lng_plot = mean(longest, na.rm = TRUE)) %>% 
+   ungroup() %>% 
+  complete(site, plot, genus,
+             fill = list(mean_lng_plot = 0))
+  
+  
+general_size_bins<- general_size_bins_plot %>% 
+  group_by(site, genus) %>% 
+    summarize(mean_length = mean(mean_lng_plot, na.rm = TRUE),
+           se = std.error(mean_lng_plot, na.rm = TRUE)) 
+
+
+### all corals faceted by genus 
+# error bars not correct 
+ggplot(general_size_bins, aes(x = factor(site), y=mean_length, group = genus)) + 
+  geom_col(aes(fill = genus, group = genus), color = "black") + 
+  geom_errorbar(aes(ymin = mean_length - se, ymax = mean_length + se, 
+                    width = .01 ,
+                    group = genus, position = "dodge"))+
+  scale_fill_manual(values = c("darkseagreen3", "cadetblue3"))+
+  theme_classic() +
+  facet_grid(~genus)+
+  theme(axis.text.x = element_text(angle = -80, hjust = -.9)) +
+  labs( x = "Site" , 
+        y = "Mean Length")
+  #scale_x_discrete(breaks = c("120","124", "134", "136", "143", "149", "154", "157", "183", "167", "185", "186", "171", "173"))
+
+ggsave(here("figures","site_mean_length.png"))
+  
+```
+
+## Looking at juveniles
+- accounted for zeros in means 
+
+## looking at juveniles (<5)
+```{r avg juv - all}
+
+num_juveniles$site <- as.factor(num_juveniles$site)
+num_juveniles$plot <- as.factor(num_juveniles$plot)
+#### Looking at juvenile location from the avg by plot  
+num_juveniles<- size_bins %>% 
+  filter(longest <= 5)%>% 
+  filter(site != "167") %>% 
+  filter(plot != "6")  %>% 
+  select(-species, -length,-width, -lat, -long) %>% 
+  #mutate(n = 1) %>% 
+  group_by(site, plot, genus, .drop=FALSE) %>%
+  summarize(n_juv = n()) %>% 
+  ungroup() %>% 
+  complete(site, plot, genus,
+             fill = list(n_juv = 0))
+
+ #replace(is.na(.), 0) %>% 
+  #mutate(n = 1) %>% 
+  
+  #summarise(n = sum(!is.na(id)))
+  #summarize(n_juv = n()) ## number of juveniles at each plot and site 
+
+### changing to character varibles 
+num_juveniles$site <- as.character(num_juveniles$site)
+num_juveniles$plot <- as.character(num_juveniles$plot)
+  
+### getting the avg at each site 
+avg_juv<- num_juveniles %>% 
+  group_by(site,genus) %>%  ## took out genus
+  summarize(avg_n = mean(n_juv), 
+            total_n = sum(n_juv),
+            se = std.error(n_juv)) 
+
+
+### average number from 5m^2 plots at each site ###
+ggplot(avg_juv, aes(x=factor(site), y=avg_n)) + 
+  geom_col(aes(fill = genus), color = "black") + 
+  theme_classic()  + 
+  facet_wrap(~genus, aes(scale = "free"))+
+   geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                     width = .01 ,
+                     group = genus))+
+  theme(axis.text.x = element_text(angle = 0)) +
+  theme(axis.text.x = element_text(angle = -80, hjust = -.9))+
+  scale_fill_manual(values = c("darkseagreen3", "cadetblue3"))+
+  labs(x = "Site", 
+       y = expression(Mean ~Number~of~Juveniles~(5~m^2)))
+
+#ggsave(here("figures","avg_juv_per_site.png"))
+```
+183, 147 see high abundance for both acr and poc compared to other sites for each taxa
+
+### Joining juv data with contact data
+```{r}
+## contact and juv per plot at plot level  
+juv_contact_join_plot <- full_join(contact_wide_plot, num_juveniles, by = c("site", "plot"))
+
+## joined contact percentages by site to avg number of juveniles for site
+juv_contact_join <- full_join(contact_wide, avg_juv, by = "site")
+
+## looking at contact vs. avg juveniles 
+plot(juv_contact_join$pocillopora ~ juv_contact_join$avg_n)
+
+## plot
+## no interesting patterns here 
+ggplot(data = juv_contact_join_plot, aes(y = n_juv , x = acropora)) + 
+  geom_point(aes(color = genus)) 
+  #geom_smooth()
+
+#plot(juv_contact_join$acropora ~ juv_contact_join$n_juv)
+```
+### Acr and Poc juveniels
+- taking "num_juv" and filtering genus
+
+```{r avg juv - acr}
+## spearating by taxa 
+num_juveniles_acr <- num_juveniles %>% 
+  filter(genus == "acr")
+
+### changing to character varibles 
+num_juveniles_acr$site <- as.character(num_juveniles_acr$site)
+num_juveniles_acr$plot <- as.character(num_juveniles_acr$plot)
+
+### total number of all 5 (5m^2) plots at each site ###
+ggplot(num_juveniles_acr, aes(x=factor(site), y=n_juv)) + 
+  geom_col() + 
+  theme_classic()  + 
+  # geom_errorbar(aes(ymin = n_juv - se, ymax = n_juv + se, 
+  #                   width = .01 ,
+  #                   group = genus))+
+  theme(axis.text.x = element_text(angle = 0)) + 
+  scale_fill_manual(values = c("darkseagreen3", "cadetblue3"))+
+  labs(x = "Site", 
+       y = expression(Number~of~Juvenile~ Acr~(125~m^2)))
+        
+## acr at each site 
+avg_juv_acr <-  num_juveniles_acr %>% 
+  group_by(site,genus) %>%  ## took out genus
+  summarize(avg_n = mean(n_juv, na.rm = TRUE),
+            total_n = sum(n_juv, na.rm = TRUE),
+            se = std.error(n_juv, na.rm = TRUE)) 
+
+
+### average number of juveniles at each site (5 m^2) ###
+ggplot(avg_juv_acr, aes(x=factor(site), y=avg_n)) + 
+  geom_col(fill = "darkseagreen3",color = "black") + 
+ # scale_fill_manual(values = c("darkseagreen3", "cadetblue3")) +
+  geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se),
+                    width = .01)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -80, hjust = -.9)) + 
+  labs(x = "Site", 
+       y = expression(Mean~ Number~of~Juvenile~ Acr~(5~m^2)))
+     
+```
+
+```{r avg juv - poc}
+## separting for poc 
+num_juveniles_poc <- num_juveniles %>% 
+  filter(genus == "poc")
+
+### changing to character varibles 
+num_juveniles_poc$site <- as.character(num_juveniles_poc$site)
+num_juveniles_poc$plot <- as.character(num_juveniles_poc$plot)
+
+### total number of all 5 (5m^2) plots at each site ###
+ggplot(num_juveniles_poc, aes(x=factor(site), y=n_juv)) + 
+  geom_col() + 
+  theme_classic()  + 
+  # geom_errorbar(aes(ymin = n_juv - se, ymax = n_juv + se, 
+  #                   width = .01 ,
+  #                   group = genus))+
+  theme(axis.text.x = element_text(angle = 0)) + 
+  scale_fill_manual(values = c("darkseagreen3", "cadetblue3"))+
+  labs(x = "Site", 
+       y = expression(Number~of~Juveniles~(125~m^2)))
+        
+## acr at each site 
+avg_juv_poc <-  num_juveniles_poc %>% 
+  group_by(site,genus) %>%  ## took out genus
+  summarize(avg_n = mean(n_juv, na.rm = TRUE),
+            total_n = sum(n_juv, na.rm = TRUE),
+            se = std.error(n_juv, na.rm = TRUE)) 
+
+
+### average number of juveniles at each site (5 m^2) ###
+ggplot(avg_juv_poc, aes(x=factor(site), y=avg_n)) + 
+  geom_col(fill = "darkseagreen3",color = "black") + 
+ # scale_fill_manual(values = c("darkseagreen3", "cadetblue3")) +
+  geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se),
+                    width = .01)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -80, hjust = -.9)) + 
+  labs(x = "Site", 
+       y = expression(Mean~ Number~of~Poc ~Juveniles~(5~m^2)))
+```
+
+### Plotting juv poc vs juv acr 
+put together separate poc and acr data sets to look against each other 
+```{r }
+poc_acr_join <- full_join(num_juveniles_poc, num_juveniles_acr, by= c("site","plot")) %>% 
+  rename(poc = genus.x, acr =genus.y, n_poc = n_juv.x, n_acr = n_juv.y)  
+  #filter(site != "171")  
+  #filter(site %in% c("171","183", "147","185","134","157","152","173"))
+
+plot(poc_acr_join$n_poc ~ poc_acr_join$n_acr)
+
+ggplot(poc_acr_join, aes(y=n_poc, x=n_acr)) + 
+   geom_point(aes(color = site) ) + 
+  theme_classic() 
+  #geom_smooth(method = "lm")
+
+#ggsave(here("figures","juv_data_poc_acr_no171.png"))
+
+poc_acr_join_lm <- lm(data = poc_acr_join, n_acr ~ n_poc)
+summary(poc_acr_join_lm)
+
+```
+
+-by taking our 171 (highest site for acropora recruits) its more linear 
+-Are they settling in the same area? Kinda - poc are everywhere and acr mostly on the east corner... But they seem to be somewhat correlated 
+
+- above is across the entire northshore - want to see if theres a correlation on a smaller level 
+
+### Looking at "regions" 
+#### Northeast corner 
+```{r}
+poc_acr_join_east <- poc_acr_join %>% 
+  filter(site %in%  c("186", "183", "185", "171", "173"))
+
+
+plot(poc_acr_join_east$n_poc~ poc_acr_join_east$n_acr)
+
+poc_acr_join_east_lm <- lm(poc_acr_join_east$n_poc~ poc_acr_join_east$n_acr)
+summary(poc_acr_join_east_lm)
+
+```
+seems to be a coorelation on the east side only when I remove 171 
+
+- tried to separate by east, mid, east, only see a pattern of correlation on the east corner 
+#### Mid section 
+```{r}
+poc_acr_join_mid <- poc_acr_join %>% 
+  filter(site %in%  c("157", "154", "147", "152", "143","143"))
+
+plot(poc_acr_join_mid$n_poc~ poc_acr_join_mid$n_acr)
+
+poc_acr_join_mid_lm <- lm(poc_acr_join_mid$n_poc~ poc_acr_join_mid$n_acr)
+summary(poc_acr_join_mid_lm)
+```
+
+#### West corner
+```{r}
+poc_acr_join_west <- poc_acr_join %>% 
+  filter(site %in%  c("134", "124", "136", "120", "131"))
+
+plot(poc_acr_join_west$n_poc~ poc_acr_join_west$n_acr)
+
+poc_acr_join_west_lm <- lm(poc_acr_join_west$n_poc~ poc_acr_join_west$n_acr)
+summary(poc_acr_join_west_lm)
+```
+
+
+### looking at size bins 
+
+```{r adult size bins- all}
+## put 'adult' category into size bins 
+adults <- size_bins %>% 
+  #filter(longest >= 3) %>% 
+  mutate(size_bins = case_when( 
+    longest <= 5 ~ "<5",
+    # longest == 3.01 ~ "3-5",
+    # longest <= 5 ~ "3-5",
+    longest == 5.01 ~ "5-10",
+    longest <= 10 ~ "5-10",
+    longest == 10.01 ~ "10-15",
+    longest <= 15 ~ "10-15",
+    longest == 15.01 ~ "15-20",
+    longest <= 20 ~ "15-20",
+    longest == 20.01 ~ "20-25",
+    longest <= 25 ~ "20-25",
+    longest == 25.01 ~ "25-30",
+    longest <= 30 ~ "25-30",
+    longest == 30.01 ~ "30-35", 
+    longest <= 35 ~ "30-35",
+    longest == 35.01 ~ "35-40", 
+    longest <= 40 ~ "35-40",
+    longest == 40.01 ~ "40-45", 
+    longest <= 45 ~ "40-45",
+    longest == 45.01 ~ "45-50", 
+    longest <= 50 ~ "45-50",
+    longest >= 50.01 ~ ">50", 
+    )) %>% 
+  filter(plot != "6") %>% 
+  select(-width, - length, -lat, -long)
+
+## plot to see size bins 
+ggplot(adults , aes(x = size_bins)) + 
+  geom_bar( fill = 'lightblue') + 
+  theme_classic ()
+
+## summarized data at PLOT level 
+sum_size_bins <- adults %>% 
+  group_by(site, plot, genus, size_bins, .drop=FALSE) %>%
+  summarize(sum = n()) %>% 
+  ungroup() %>% 
+  complete(site, plot, genus,size_bins,
+             fill = list(sum = 0)) %>% 
+    mutate(size_bins = fct_reorder(size_bins, desc(size_bins)))
+  
+
+##summarized data by SITE level
+sum_siz_bins_site <- sum_size_bins %>% 
+  group_by (site, genus, size_bins) %>% 
+  summarize(avg_n = mean(sum),
+            se = std.error(sum))
+
+## super messy graph of size bins for both acr and poc 
+ ggplot(data = sum_siz_bins_site, aes(x = as.character(site), y = avg_n),
+       group = size_bins) + 
+  geom_point(aes(color = size_bins, group = size_bins), 
+           position = "dodge")+
+   geom_line(aes(color = size_bins, group = size_bins), 
+           position = "dodge")+
+   geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                     width = .01 ,
+                     color = size_bins))+
+  labs( x = "site",
+        y = "Mean Poc Size Bins") +
+  facet_wrap( ~ genus)+
+  theme_classic()
+```
+
+### looking at all sites size bins by abundance 
+```{r}
+sum_size_bins_distribution <- adults %>% 
+  group_by(site, plot, genus, size_bins, .drop=FALSE) %>%
+  summarize(sum = n()) %>% 
+  group_by(site, genus, size_bins) %>% 
+  summarize(sum_site= n())
+  # ungroup() %>% 
+  # complete(site, plot, genus,size_bins,
+  #            fill = list(sum = 0)) %>% 
+  #   mutate(size_bins = fct_reorder(size_bins, desc(size_bins)))
+
+## looking at 120 - not a good site for acropora but good range of poc sizes 
+sum_size_bins_distribution %>% 
+  filter(site == "120") %>% 
+ggplot(aes(x = size_bins, y = sum_site)
+       ) + 
+  geom_col(aes(fill = size_bins), color = "black",
+           position = "dodge")+
+   # geom_errorbar(aes(ymin = sum_site - se, ymax = sum_site + se,
+   #                   width = .01 ,
+   #                   color = size_bins, group = size_bins))+
+  labs( x = "site",
+        y = "Mean Size Bins - 120") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+
+## 124 - larger acr here and poc keeps climbing seems like a historically good site for poc 
+sum_size_bins_distribution %>% 
+  filter(site == "124") %>% 
+ggplot(aes(x = size_bins, y = sum_site)
+       ) + 
+  geom_col(aes(fill = size_bins), color = "black",
+           position = "dodge")+
+   # geom_errorbar(aes(ymin = sum_site - se, ymax = sum_site + se,
+   #                   width = .01 ,
+   #                   color = size_bins, group = size_bins))+
+  labs( x = "site",
+        y = "Mean Size Bins - 124") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+
+## 134 - good for both taxa 
+sum_size_bins_distribution %>% 
+  filter(site == "134") %>% 
+ggplot(aes(x = size_bins, y = sum_site)
+       ) + 
+  geom_col(aes(fill = size_bins), color = "black",
+           position = "dodge")+
+   # geom_errorbar(aes(ymin = sum_site - se, ymax = sum_site + se,
+   #                   width = .01 ,
+   #                   color = size_bins, group = size_bins))+
+  labs( x = "site",
+        y = "Mean Size Bins - 134") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 136 - not many acr or poc 
+sum_size_bins_distribution %>% 
+  filter(site == "136") %>% 
+ggplot(aes(x = size_bins, y = sum_site)
+       ) + 
+  geom_col(aes(fill = size_bins), color = "black",
+           position = "dodge")+
+   # geom_errorbar(aes(ymin = sum_site - se, ymax = sum_site + se,
+   #                   width = .01 ,
+   #                   color = size_bins, group = size_bins))+
+  labs( x = "site",
+        y = "Mean Size Bins - 136") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 143 - almost no  acr here and low recruitment but some larger poc corals 
+sum_size_bins_distribution %>% 
+  filter(site == "143") %>% 
+ggplot(aes(x = size_bins, y = sum_site)
+       ) + 
+  geom_col(aes(fill = size_bins), color = "black",
+           position = "dodge")+
+   # geom_errorbar(aes(ymin = sum_site - se, ymax = sum_site + se,
+   #                   width = .01 ,
+   #                   color = size_bins, group = size_bins))+
+  labs( x = "site",
+        y = "Mean Size Bins - 143") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 149 - decent for poc and low for acr 
+sum_size_bins_distribution %>% 
+  filter(site == "149") %>% 
+ggplot(aes(x = size_bins, y = sum_site)
+       ) + 
+  geom_col(aes(fill = size_bins), color = "black",
+           position = "dodge")+
+   # geom_errorbar(aes(ymin = sum_site - se, ymax = sum_site + se,
+   #                   width = .01 ,
+   #                   color = size_bins, group = size_bins))+
+  labs( x = "site",
+        y = "Mean Size Bins - 149") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 154 - more of a range shown here for poc , low acr  
+sum_size_bins_distribution %>% 
+  filter(site == "154") %>% 
+ggplot(aes(x = size_bins, y = sum_site)
+       ) + 
+  geom_col(aes(fill = size_bins), color = "black",
+           position = "dodge")+
+   # geom_errorbar(aes(ymin = sum_site - se, ymax = sum_site + se,
+   #                   width = .01 ,
+   #                   color = size_bins, group = size_bins))+
+  labs( x = "site",
+        y = "Mean Size Bins - 154") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 157 -  low coral  
+sum_size_bins_distribution %>% 
+  filter(site == "157") %>% 
+ggplot(aes(x = size_bins, y = sum_site)
+       ) + 
+  geom_col(aes(fill = size_bins), color = "black",
+           position = "dodge")+
+   # geom_errorbar(aes(ymin = sum_site - se, ymax = sum_site + se,
+   #                   width = .01 ,
+   #                   color = size_bins, group = size_bins))+
+  labs( x = "site",
+        y = "Mean Size Bins - 157") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 183 - large and small acr coral here and no in between and gradual incline in poc  
+sum_size_bins_distribution %>% 
+  filter(site == "183") %>% 
+ggplot(aes(x = size_bins, y = sum_site)
+       ) + 
+  geom_col(aes(fill = size_bins), color = "black",
+           position = "dodge")+
+   # geom_errorbar(aes(ymin = sum_site - se, ymax = sum_site + se,
+   #                   width = .01 ,
+   #                   color = size_bins, group = size_bins))+
+  labs( x = "site",
+        y = "Mean Size Bins - 183") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+
+## 185 - a lot of large poc corals and good amount of acr   
+sum_size_bins_distribution %>% 
+  filter(site == "185") %>% 
+ggplot(aes(x = size_bins, y = sum_site)
+       ) + 
+  geom_col(aes(fill = size_bins), color = "black",
+           position = "dodge")+
+   # geom_errorbar(aes(ymin = sum_site - se, ymax = sum_site + se,
+   #                   width = .01 ,
+   #                   color = size_bins, group = size_bins))+
+  labs( x = "site",
+        y = "Mean Size Bins - 185") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 186 - good place for poc - a lot across size and some acr    
+sum_size_bins_distribution %>% 
+  filter(site == "186") %>% 
+ggplot(aes(x = size_bins, y = sum_site)
+       ) + 
+  geom_col(aes(fill = size_bins), color = "black",
+           position = "dodge")+
+   # geom_errorbar(aes(ymin = sum_site - se, ymax = sum_site + se,
+   #                   width = .01 ,
+   #                   color = size_bins, group = size_bins))+
+  labs( x = "site",
+        y = "Mean Size Bins - 186") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 171 - good range of acr and poc 
+sum_size_bins_distribution %>% 
+  filter(site == "171") %>% 
+ggplot(aes(x = size_bins, y = sum_site)
+       ) + 
+  geom_col(aes(fill = size_bins), color = "black",
+           position = "dodge")+
+   # geom_errorbar(aes(ymin = sum_site - se, ymax = sum_site + se,
+   #                   width = .01 ,
+   #                   color = size_bins, group = size_bins))+
+  labs( x = "site",
+        y = "Mean Size Bins - 171") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+
+## 173 - some acr larger than recruits and poc see more larger colonies than 5-10
+sum_size_bins_distribution %>% 
+  filter(site == "173") %>% 
+ggplot(aes(x = size_bins, y = sum_site)
+       ) + 
+  geom_col(aes(fill = size_bins), color = "black",
+           position = "dodge")+
+   # geom_errorbar(aes(ymin = sum_site - se, ymax = sum_site + se,
+   #                   width = .01 ,
+   #                   color = size_bins, group = size_bins))+
+  labs( x = "site",
+        y = "Mean Size Bins - 173") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+```
+Sites for that seem to be good for Acr 
+171, 173 (okay), 124, 134, 185
+
+Sites that seem to be historically good for acr 
+
+183 (a site that is becoming a good habitat for Acr)
+
+Sites for that seem to be good for poc 
+186, 183, 154, 134, 129
+
+Sites that seem to be historically good for poc 
+185, 124
+
+### looking at all sites size bin means 
+```{r adult size bins- all}
+##"120","124", "134", "136", "143", "149", "154", "157", "183", "185", "186", "171", "173"
+##Looking at size bins for each site 
+sum_siz_bins_site %>% 
+  filter(site == "120") %>% 
+  filter(size_bins != "NA") %>% 
+   filter(genus == "acr") %>% 
+ggplot(aes(x = size_bins, y = avg_n, group = size_bins, group = size_bins),
+       group = size_bins) + 
+  geom_col(aes(fill = size_bins, group = size_bins), color = "black",
+           position = "dodge")+
+   geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                     width = .01 ,
+                     group = size_bins), color = "black")+
+  labs( x = "site",
+        y = "Mean Size Bins - 120") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+##124 -comparatively has hihg amounts of all size bins for Poc 
+sum_siz_bins_site %>% 
+  filter(site == "124") %>% 
+  filter(size_bins != "NA") %>% 
+  filter(genus == "acr") %>% 
+ggplot(aes(x = size_bins, y = avg_n, group = size_bins, group = size_bins),
+       group = size_bins) + 
+  geom_col(aes(fill = size_bins, group = size_bins), color = "black",
+           position = "dodge")+
+   geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                     width = .01 ,
+                     group = size_bins), color = "black")+
+  labs( x = "site",
+        y = "Mean Size Bins - 124") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+##134 - some larger groups for Acr in high abundances  
+sum_siz_bins_site %>% 
+  filter(site == "134") %>% 
+  filter(size_bins != "NA") %>% 
+   filter(genus == "acr") %>% 
+ggplot(aes(x = size_bins, y = avg_n, group = size_bins, group = size_bins),
+       group = size_bins) + 
+  geom_col(aes(fill = size_bins, group = size_bins), color = "black",
+           position = "dodge")+
+   geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                     width = .01 ,
+                     group = size_bins), color = "black")+
+  labs( x = "site",
+        y = "Mean Size Bins - 134") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 136 - large poc here and small ones 
+sum_siz_bins_site %>% 
+  filter(site == "136") %>% 
+  filter(size_bins != "NA") %>% 
+   filter(genus == "acr") %>% 
+ggplot(aes(x = size_bins, y = avg_n, group = size_bins, group = size_bins),
+       group = size_bins) + 
+  geom_col(aes(fill = size_bins, group = size_bins), color = "black",
+           position = "dodge")+
+   geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                     width = .01 ,
+                     group = size_bins), color = "black")+
+  labs( x = "site",
+        y = "Mean Size Bins - 136") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 143 - not a great site overal, really bad for acr 
+sum_siz_bins_site %>% 
+  filter(site == "143") %>% 
+  filter(size_bins != "NA") %>% 
+   filter(genus == "acr") %>% 
+ggplot(aes(x = size_bins, y = avg_n, group = size_bins, group = size_bins),
+       group = size_bins) + 
+  geom_col(aes(fill = size_bins, group = size_bins), color = "black",
+           position = "dodge")+
+   geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                     width = .01 ,
+                     group = size_bins), color = "black")+
+  labs( x = "site",
+        y = "Mean Size Bins - 143") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 149 -   High rec site for both, very low acr 
+sum_siz_bins_site %>% 
+  filter(site == "149") %>% 
+  filter(size_bins != "NA") %>% 
+   filter(genus == "acr") %>% 
+ggplot(aes(x = size_bins, y = avg_n, group = size_bins, group = size_bins),
+       group = size_bins) + 
+  geom_col(aes(fill = size_bins, group = size_bins), color = "black",
+           position = "dodge")+
+   geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                     width = .01 ,
+                     group = size_bins), color = "black")+
+  labs( x = "site",
+        y = "Mean Size Bins - 149") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 152- high poc recruitment and some large colonies, good rangge of sizes   
+sum_siz_bins_site %>% 
+  filter(site == "152") %>% 
+  filter(size_bins != "NA") %>%
+   filter(genus == "acr") %>% 
+ggplot(aes(x = size_bins, y = avg_n, group = size_bins, group = size_bins),
+       group = size_bins) + 
+  geom_col(aes(fill = size_bins, group = size_bins), color = "black",
+           position = "dodge")+
+   geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                     width = .01 ,
+                     group = size_bins), color = "black")+
+  labs( x = "site",
+        y = "Mean Size Bins - 152") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 154- high poc recruitment and some large colonies, good rangge of sizes   
+sum_siz_bins_site %>% 
+  filter(site == "154") %>% 
+  filter(size_bins != "NA") %>% 
+   filter(genus == "acr") %>% 
+ggplot(aes(x = size_bins, y = avg_n, group = size_bins, group = size_bins),
+       group = size_bins) + 
+  geom_col(aes(fill = size_bins, group = size_bins), color = "black",
+           position = "dodge")+
+   geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                     width = .01 ,
+                     group = size_bins), color = "black")+
+  labs( x = "site",
+        y = "Mean Size Bins - 154") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 157 -   very low in all size bins across genus and high poc recruits  
+sum_siz_bins_site %>% 
+  filter(site == "157") %>% 
+  filter(size_bins != "NA") %>% 
+  filter(genus == "acr") %>% 
+ggplot(aes(x = size_bins, y = avg_n, group = size_bins, group = size_bins),
+       group = size_bins) + 
+  geom_col(aes(fill = size_bins, group = size_bins), color = "black",
+           position = "dodge")+
+   geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                     width = .01 ,
+                     group = size_bins), color = "black")+
+  labs( x = "site",
+        y = "Mean Size Bins - 157") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 183 -   recruit and med size spot for poc   
+sum_siz_bins_site %>% 
+  filter(site == "183") %>% 
+  filter(size_bins != "NA") %>% 
+   filter(genus == "acr") %>% 
+ggplot(aes(x = size_bins, y = avg_n, group = size_bins, group = size_bins),
+       group = size_bins) + 
+  geom_col(aes(fill = size_bins, group = size_bins), color = "black",
+           position = "dodge")+
+   geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                     width = .01 ,
+                     group = size_bins), color = "black")+
+  labs( x = "site",
+        y = "Mean Size Bins - 183") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 185 -   seems to be a great site for poc as it starts to climb into high size categories  
+sum_siz_bins_site %>% 
+  filter(site == "185") %>% 
+  filter(size_bins != "NA") %>% 
+   filter(genus == "acr") %>% 
+ggplot(aes(x = size_bins, y = avg_n, group = size_bins, group = size_bins),
+       group = size_bins) + 
+  geom_col(aes(fill = size_bins, group = size_bins), color = "black",
+           position = "dodge")+
+   geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                     width = .01 ,
+                     group = size_bins), color = "black")+
+  labs( x = "site",
+        y = "Mean Size Bins - 185") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 186 -   similar to 185 for poc (a bit lower in means) and some acr across size bins   
+sum_siz_bins_site %>% 
+  filter(site == "186") %>% 
+  filter(size_bins != "NA") %>% 
+   filter(genus == "acr") %>% 
+ggplot(aes(x = size_bins, y = avg_n, group = size_bins, group = size_bins),
+       group = size_bins) + 
+  geom_col(aes(fill = size_bins, group = size_bins), color = "black",
+           position = "dodge")+
+   geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                     width = .01 ,
+                     group = size_bins), color = "black")+
+  labs( x = "site",
+        y = "Mean Size Bins - 186") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 171 -   large amounts of small corals (<10) across genus, some large acr and good range of poc  
+sum_siz_bins_site %>% 
+  filter(site == "171") %>% 
+  filter(size_bins != "NA") %>% 
+   filter(genus == "acr") %>% 
+ggplot(aes(x = size_bins, y = avg_n, group = size_bins, group = size_bins),
+       group = size_bins) + 
+  geom_col(aes(fill = size_bins, group = size_bins), color = "black",
+           position = "dodge")+
+   geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                     width = .01 ,
+                     group = size_bins), color = "black")+
+  labs( x = "site",
+        y = "Mean Size Bins - 171") +
+  facet_wrap( ~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+
+## 173 -   large amounts of small corals (<10) across genus and good range of poc  
+sum_siz_bins_site %>% 
+  filter(site == "173") %>% 
+  filter(size_bins != "NA") %>% 
+   filter(genus == "acr") %>% 
+ggplot(aes(x = size_bins, y = avg_n, group = size_bins, group = size_bins),
+       group = size_bins) + 
+  geom_col(aes(fill = size_bins, group = size_bins), color = "black",
+           position = "dodge")+
+   geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                     width = .01 ,
+                     group = size_bins), color = "black")+
+  labs( x = "site",
+        y = "Mean Size Bins - 173") +
+  facet_wrap(~ genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))
+```
+120 - very low # for all acr size bins,  poc with med recruitment and okay range of  sizes
+124 - still quite low for acr but a bit better than 120 and seems to be a great site for poc as some of the medium size bins are higher than the recruits 
+134 - okay for acr (sems like maybe a good range of sizes), ok for poc (some survive and high recruitment)
+136 - very low numbers for both taxa, low means for poc but good representation of sizes - on avg no more than 1.5 colonies found so not good 
+143 -  (worst) no acr, only a few recruits, medium recruits for poc and some larger 
+149 - poc - medium recruitment and some larger but not much, acr some recruitment and a few larger ones 
+152 - great location for poc but not acr (highest bin is 5-10 with low recruitment so maybe getting better here) 
+154 - largest mean lengths found here and is a good place for poc but not for acr
+157 - (worst) poor site for Acr and high recruitment for poc but do not seem to survive 
+185 - really great for poc with high recruitment and good site for Acr
+183 - means look far worse than the abundances - so maybe one or two plots had a lot but overall really poor for acr (high turnover) and high turnover for poc (highest recruitment)
+185 - looks low for acr and seems to be a great site for poc 
+186 - a few more larger acr here than 185 but still low averages, poc seems to be good spot with stepwise increase 
+171 - high recruitemnt for acr and a few larger sizes, poc really nice stepwise increase with medium recruitment 
+173 - a few large acr and some recruitment, mainly looks like a turnover site, poc like 171 but not as nice with med recruitment 
+
+From notes above 
+
+Good for acr: 134, 149, 185
+
+bad for acr: 157, 143 
+
+Good for Poc:124,136,143, 152, 154,185,186
+
+Bad for Poc:
+
+
+### Separated taxa 
+```{r adult size bins- all}
+##acr 
+sum_size_bins_site_acr <- sum_siz_bins_site %>%  
+  filter (genus == "acr")
+
+#plot 
+ggplot(data = sum_size_bins_site_acr, aes(x = as.character(site), y = avg_n),
+       group = size_bins) + 
+  geom_point(aes(color = size_bins, group = size_bins), 
+           position = "dodge")+
+   geom_line(aes(color = size_bins, group = size_bins), 
+           position = "dodge")+
+   geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                     width = .01 ,
+                     color = size_bins))+
+  labs( x = "site",
+        y = "Mean Acr Size Bins") +
+  #facet_wrap( ~ genus)+
+  theme_classic()
+
+## poc 
+sum_size_bins_site_poc <- sum_siz_bins_site %>%  
+  filter (genus == "poc")
+
+## plot poc 
+ ggplot(data = sum_size_bins_site_poc, aes(x = as.character(site), y = avg_n),
+       group = size_bins) + 
+  geom_point(aes(color = size_bins, group = size_bins), 
+           position = "dodge")+
+   geom_line(aes(color = size_bins, group = size_bins), 
+           position = "dodge")+
+   geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                     width = .01 ,
+                     color = size_bins))+
+  labs( x = "site",
+        y = "Mean Poc Size Bins") +
+  #facet_wrap( ~ genus)+
+  theme_classic()
+```
+Acr - few sites where <5 is not the largest size bin - could this mean they are surviving enough to build a population? 124,152,186,167, 131, 136,149
+
+poc has less areas where the smallest size bin is not in first place - 124,131,136
+
+Is this just because there are more pocillopora recruits? 
+
+### plot juv vs size of adults - no correlation 
+
+```{r }
+#filter out smallest ones 
+juv_longest <- size_bins %>% 
+  filter(longest >= "5")
+
+juv_longest_join <- full_join(size_bins, num_juveniles, by =c("site", "plot")) %>% 
+  rename( length_genus = genus.x, juv_genus = genus.y) 
+
+plot(juv_longest_join$n_juv ~juv_longest_join$longest)
+
+juv_longest_join_acr <- juv_longest_join %>%  
+  filter(length_genus == "acr")  
+ # filter(juv_genus == "acr")
+
+plot(juv_longest_join_acr$n_juv ~juv_longest_join_acr$longest)
+
+
+
+```
+seems to have a neg coorelation - where we see recruits we dont see a lot of large colonies?
+
+### exploring the sites adult categories with highest abundances of juveniles
+```{r adult size bins- acr}
+ ### sep acr 
+sum_size_bins_site_acr_filter <- sum_size_bins_site_acr %>% 
+  filter(site %in% c("171","185","147","183","173", "134")) %>% 
+  filter(size_bins != "<5") 
+  # factor(size_bins, order(levels = c("3-5","5-10","10-15", "15-20", "20-25" , "25-30", "30-35","35-40", "40-45", "45-50", ">50"))) %>% 
+  # as.data.frame()
+
+ggplot(sum_size_bins_site_acr_filter, aes(x=as.factor(size_bins), y=avg_n)) + 
+  geom_col(fill = "darkseagreen3",
+           position = "dodge", color = "black") + 
+  theme_classic()  + 
+  facet_wrap(~site, scale = "free")+
+   #geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                    # width = .01 ,
+                    # group = genus))+
+
+  theme(axis.text.x = element_text(angle = -70, hjust = .3 , vjust = 1))+
+  scale_fill_manual(values = c("darkseagreen3", "cadetblue3"))+
+  labs(x = "Site", 
+       y = expression(Mean ~Number~of~Acr~(5~m^2)))
+  
+  
+## super messy graph of size bins -acr  
+ ggplot(data = sum_siz_bins_site_acr, aes(x = as.character(site), y = avg_n),
+       group = size_bins) + 
+  geom_point(aes(color = size_bins, group = size_bins), 
+           position = "dodge")+
+  geom_line(aes(color = size_bins, group = size_bins))+
+  labs( x = "site",
+        y = "Mean Count in Size Bin") +
+  facet_wrap( ~ site)+
+  theme_classic()
+
+```
+134 looks like a great survival site for Acropora 
+173 is another good contender
+```{r adult size bins- poc}
+### looking at size bins for high juvenile sites 
+sum_size_bins_site_poc_filter <- sum_size_bins_site_poc %>% 
+  filter(site %in% c("157","134","183","147", "185", "152", "171")) %>% 
+  filter(size_bins != "<5") 
+  # factor(size_bins, order(levels = c("3-5","5-10","10-15", "15-20", "20-25" , "25-30", "30-35","35-40", "40-45", "45-50", ">50"))) %>% 
+  # as.data.frame()
+
+## plot 
+ggplot(sum_size_bins_site_poc_filter, aes(x=as.factor(size_bins), y=avg_n)) + 
+  geom_col(fill = "darkseagreen3",
+           position = "dodge", color = "black") + 
+  theme_classic()  + 
+  facet_grid(~site, scale = "free")+
+   #geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se,
+                    # width = .01 ,
+                    # group = genus))
+  theme(axis.text.x = element_text(angle = -90, hjust = .3 , vjust = 1))+
+  scale_fill_manual(values = c("darkseagreen3", "cadetblue3"))+
+  labs(x = "Site", 
+       y = expression(Mean ~Number~of~Poc~Juveniles~(5~m^2)))
+```
+- poc 152, 157 , 185 - might be good places for poc survival 
+
+different areas for both taxa for possibly survival sites 
+
+### looking at specific size bins for poc 
+```{r adult size bins- poc}
+### sep poc 
+sum_siz_bins_site_poc <- sum_siz_bins_site %>% 
+  filter(genus== "poc")  
+  #filter(size_bins %in% c("15-20", "20-25", "25-30", "30-35", "35-40"))
+
+## super messy graph of size bins -acr  
+ ggplot(data = sum_siz_bins_site_poc, aes(x = as.character(site), y = avg_n),
+       group = size_bins) + 
+  geom_point(aes(color = size_bins, group = size_bins), 
+           position = "dodge")+
+  geom_line(aes(color = size_bins, group = size_bins))+
+  labs( x = "site",
+        y = "Mean Count in Size Bin") +
+  facet_wrap( ~ genus)+
+  theme_classic()
+
+```
+
+### looking at acr top size bins
+
+```{r av acr adults size bins}
+## acr adults per site 
+sum_siz_bins_site_acr <- sum_siz_bins_site %>% 
+  filter(genus == "acr") %>% 
+  filter(size_bins %in% c("3-5","5-10","10-15")) ## sites with highest abundance 
+
+## plotted top three sites
+ggplot(data = sum_siz_bins_site_acr, aes(x = as.character(site), y = avg_n), 
+       group = size_bins) + 
+  geom_line(aes(color = size_bins, group = size_bins), 
+           position = "dodge")+
+  geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se, color = size_bins),
+                    width = .01, 
+                position=position_dodge(width=0.1))+
+  scale_color_manual(values = c("coral", "darkseagreen3", "cadetblue3"))+
+  labs( x = "site",
+        y = "Mean Abundance in Size Bin") +
+  #facet_wrap( ~ genus)+
+  theme_classic()
+```
+
+### Poc top size bins
+
+```{r}
+## Just pocilloproa
+sum_siz_bins_site_poc <- sum_siz_bins_site %>% 
+  filter(genus == "poc") %>% 
+  filter(size_bins %in% c("5-10","10-15", "15-20" )) %>% 
+  mutate(size_bins = fct_reorder(size_bins, desc(avg_n)))
+
+## graph of pocillopora colonies in top 4 size bins
+ggplot(data = sum_siz_bins_site_poc, aes(x = as.character(site), y = avg_n), group = size_bins) + 
+  geom_line(aes(color = size_bins, group = size_bins), 
+           position = "dodge")+
+  geom_errorbar(aes(ymin = avg_n - se, ymax = avg_n + se, color = size_bins),
+                    width = .01, 
+                position=position_dodge(width=0.1))+
+  labs( x = "site",
+        y = "Mean Abundance in Size Bin") +
+  #facet_wrap( ~ size_bins , scale = "free")+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = -90)) 
+```
+
+### All Adults across all sites
+- accounted for zeros in means 
+
+```{r av adults}
+#### Looking at adults location  at each site 
+num_adults<- adults %>% 
+  filter(longest >= 5)%>% 
+  filter(site != "167") %>% 
+  group_by(site, plot, genus, .drop=FALSE) %>%
+  summarize(n_adults = n()) %>% 
+  ungroup() %>% 
+  complete(site, plot, genus,
+             fill = list(n_adults = 0))
+
+  # group_by(site, plot, genus) %>%
+  # summarize(n_adults = n())
+
+#hist(num_adults$n_adults) # right skewed
+  
+avg_adults<-  num_adults %>% 
+  group_by(site, genus) %>% 
+  summarize(avg_a = mean(n_adults, na.rm = TRUE),
+            se = std.error(n_adults, na.rm = TRUE), 
+            total_a = sum(n_adults,  na.rm = TRUE))
+
+  
+### sum of all 5 (125m^2) plots at each site 
+ggplot(num_adults, aes(x=factor(site), y=n_adults)) + 
+  geom_col(aes(fill = genus)) + 
+  theme_classic()  + 
+  facet_wrap(~genus, aes(scale = "free"))+
+  # geom_errorbar(aes(ymin = n_adults - se, ymax = n_adults + se, 
+  #                   width = .01 ,
+  #                   group = genus))+
+  theme(axis.text.x = element_text(angle = 0)) + 
+  scale_fill_manual(values = c("darkseagreen3", "cadetblue3"))+
+  labs(x = "Site", 
+       y = expression(Number~of~Adults~(125~m^2)))
+
+### average number of adults at each site (5 m^2) ###
+ggplot(avg_adults, aes(x=factor(site), y=avg_a)) + 
+  geom_col(aes(fill = genus),color = "black") + 
+  scale_fill_manual(values = c("darkseagreen3", "cadetblue3")) +
+  geom_errorbar(aes(ymin = avg_a - se, ymax = avg_a + se),
+                    width = .01)+
+  facet_wrap(~genus)+
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = -80, hjust = -.9)) + 
+  labs(x = "Site", 
+       y = expression(Mean~ Number~of~Adults~(5~m^2)))
+
+ggsave(here("figures","avg_adults_per_site.png"))
+```
+Looking at the mean number of adults across taxa and site we can see that there are high means at 
+Acr: 171, 134,152, 124
+Poc:152,124,185,171 
+but need to take this to the next step as they could be representing small size bins 
+
+### adults colonies 
+- accounted for zeros in means 
+- adults broken down by genus and then against each other
+```{r av adults}
+#####acr 
+num_adults_acr <- size_bins %>% 
+   filter(genus == "acr") %>% 
+  filter(longest >= 5)%>% 
+  filter(site != "167") %>% 
+  group_by(site, plot, genus, .drop=FALSE) %>%
+  summarize(n_adults = n()) %>% 
+  ungroup() %>% 
+  complete(site, plot, genus,
+             fill = list(n_adults = 0))
+
+
+### changing to character varibles 
+num_adults_acr$site <- as.character(num_adults_acr$site)
+num_adults_acr$plot <- as.character(num_adults_acr$plot)
+        
+## acr at each site 
+avg_a_acr <-  num_adults_acr %>% 
+  group_by(site,genus) %>%  ## took out genus
+  summarize(avg_a = mean(n_adults, na.rm = TRUE),
+            total_a = sum(n_adults, na.rm = TRUE),
+            se = std.error(n_adults, na.rm = TRUE)) 
+####poc 
+num_adults_poc <- size_bins %>% 
+   filter(genus == "poc") %>% 
+  filter(longest >= 5)%>% 
+  filter(site != "167") %>% 
+  group_by(site, plot,genus) %>% ## took out genus here
+  summarize(n_adults = n())
+
+### changing to character varibles 
+num_adults_poc$site <- as.character(num_adults_poc$site)
+num_adults_poc$plot <- as.character(num_adults_poc$plot)
+
+## poc at each site 
+avg_a_poc <-  num_adults_poc %>% 
+  group_by(site,genus) %>%  ## took out genus
+  summarize(avg_a = mean(n_adults, na.rm = TRUE),
+            total_a = sum(n_adults, na.rm = TRUE),
+            se = std.error(n_adults, na.rm = TRUE)) 
+
+### joining poc and acr together 
+## looking at select sites with only 
+poc_acr_join_a <- full_join(num_adults_poc, num_adults_acr, by= c("site","plot")) %>% 
+  rename(poc = genus.x, acr =genus.y, n_poc = n_adults.x, n_acr = n_adults.y ) 
+  #filter(site %in% c("120","124", "136", "143", "149", "154", "186"))
+           
+           #c( "171","183", "147","185","134","157","152","173")) ## sites of top juv for both poc and acr
+
+plot(poc_acr_join_a$n_poc~ poc_acr_join_a$n_acr)
+plot(resid(poc_acr_join_a$n_poc~ poc_acr_join_a$n_acr))
+qqplot(poc_acr_join_a$n_poc~ poc_acr_join_a$n_acr)
+
+# overall increase - acr driving poc? 
+ggplot(poc_acr_join_a, aes(y=n_poc, x=n_acr)) + 
+   geom_point() +
+    theme_light()
+  #geom_smooth()
+
+poc_acr_join_a_lm <- lm(data = poc_acr_join_a, n_poc~n_acr)
+summary(poc_acr_join_a_lm)
+plot(poc_acr_join_a_lm)
+
+```
+Seems like a mix, where there are high # of poc there are high number of acropora relative to their genus 
+Adults seem to be a little bit everywhere for Acroproa and Poc?
+Why is there nothing at 143 for acropora? No Acroproa lager than 5 cm at 143 
+
+
+## joining adult data with juv and contact at plot level 
+
+```{r}
+## Adding juvenile and contact data to adult data - think about incoorporationg size bins for adults here
+juv_cont_adult_plot <- full_join(juv_contact_join_plot, num_adults, by = c("site","plot", "genus"))
+
+## add bommie data to above table 
+juv_cont_adult_sa_plot <- full_join(total_sa_plot, juv_cont_adult_plot, by = c("site","plot"))
+
+## comparing in general...
+plot(juv_cont_adult_sa_plot_acr$n_juv ~ juv_cont_adult_sa_plot_acr$acropora+ juv_cont_adult_sa_plot_acr$n_adults)
+
+
+```
+
+### Exploring relationships 
+
+### for sites that overlap in both 
+looking at acr juv, contact data and adult data 
+```{r}
+
+juv_cont_adult_sa_plot_acr<- juv_cont_adult_sa_plot %>% 
+  filter(genus == "acr") 
+  #filter(site != "171")
+  #filter(site %in% c("171", "183", "147", "152", "157", "134"))
+
+### number of juveniles to adults - interesting - need to explore more
+plot(juv_cont_adult_sa_plot_acr$n_juv ~ juv_cont_adult_sa_plot_acr$n_adults)
+
+## decline as expected 
+plot(juv_cont_adult_sa_plot_acr$n_juv ~ juv_cont_adult_sa_plot_acr$dead_coral)
+
+## decline as expected 
+plot(juv_cont_adult_sa_plot_acr$n_juv ~ juv_cont_adult_sa_plot_acr$macroalgae)
+
+#decline as expected
+plot(juv_cont_adult_sa_plot_acr$n_juv ~ juv_cont_adult_sa_plot_acr$turf)
+
+# juv_cont_adult_sa_acr_lm <- lm(data = juv_cont_adult_sa_plot, n_juv ~ n_adults + acropora + hard_substrate)
+# summary(juv_cont_adult_sa_acr_lm)
+# 
+# avPlots(juv_cont_adult_sa_lm)
+# 
+# juv_cont_adult_sa_plot_acr_sep <- juv_cont_adult_sa_plot_acr %>% 
+#   mutate(acr_juv = n_juv)
+```
+
+```{r poc}
+juv_cont_adult_sa_plot_poc<- juv_cont_adult_sa_plot %>% 
+  filter(genus == "poc") 
+  #filter(site %in% c( "185", "171", "152", "124", "186","154")) ## adult sites 
+## with only these sites there seems to be a positive correlation of poc adults vs poc juv
+
+### no coorelation
+plot(juv_cont_adult_sa_plot_poc$n_juv ~ juv_cont_adult_sa_plot_poc$n_adults )
+
+## 
+plot(juv_cont_adult_sa_plot_poc$n_juv ~ juv_cont_adult_sa_plot_poc$dead_coral)
+
+## decline as expected 
+plot(juv_cont_adult_sa_plot_poc$n_juv ~ juv_cont_adult_sa_plot_poc$macroalgae) # sligh decreas
+
+#not much
+plot(juv_cont_adult_sa_plot_poc$n_juv ~ juv_cont_adult_sa_plot_poc$turf)
+```
+
+
+```{r testing some relationships}
+## test out some relationships with the data set 
+
+juv_cont_adult_sa_lm <- lm(data = juv_cont_adult_sa_plot, n_juv ~ n_adults + acropora + hard_substrate)
+summary(juv_cont_adult_sa_lm)
+
+avPlots(juv_cont_adult_sa_lm)
+
+juv_cont_adult_sa_plot_acr_sep <- juv_cont_adult_sa_plot_acr %>% 
+  mutate(acr_juv = n_juv)
+
+juv_cont_adult_sa_plot_poc_sep <- juv_cont_adult_sa_plot_poc %>% 
+  mutate( poc_juv = n_juv)
+
+juv_genus <- full_join(juv_cont_adult_sa_plot_acr_sep, juv_cont_adult_sa_plot_poc_sep , by = c("site", "plot")) %>% 
+  select(poc_juv, acr_juv, site)
+
+plot(juv_genus$poc_juv ~ juv_genus$acr_juv)
+
+### acropora adults and juv 
+## seeing more of an impact from turf rather than algae
+## percent of acropora not sig but drastically changes the explanationin varience ?? 
+juv_cont_adult_sa_plot_acr <- juv_cont_adult_sa_plot %>% 
+  filter(genus == "acr") 
+juv_cont_adult_sa_lm_acr <- lm(data = juv_cont_adult_sa_plot_acr, n_juv ~  n_adults  )
+summary(juv_cont_adult_sa_lm_acr)
+plot(juv_cont_adult_sa_lm_acr)
+
+
+plot(juv_cont_adult_sa_plot_acr$n_juv~ juv_cont_adult_sa_plot_acr$n_adults)
+
+avPlots(juv_cont_adult_sa_lm_acr)
+
+
+juv_cont_adult_sa_plot_poc <- juv_cont_adult_sa_plot %>% 
+  filter(genus == "poc") 
+juv_cont_adult_sa_lm_poc <- lm(data = juv_cont_adult_sa_plot_poc, n_juv ~   pocillopora+  acropora+ hard_substrate + macroalgae)
+
+summary(juv_cont_adult_sa_lm_poc)
+
+avPlots(juv_cont_adult_sa_lm_poc)
+```
+
+
+```{r}
+## test out some relationships with the data set 
+
+juv_cont_adult_sa_lm <- lm(data = juv_cont_adult_sa_nut_site, total_a ~ other_coral  +  percent_h)
+summary(juv_cont_adult_sa_lm)
+
+## acr
+juv_cont_adult_sa_nut_site_acr <- juv_cont_adult_sa_nut_site %>% 
+  filter(genus == "acr") 
+
+plot(juv_cont_adult_sa_nut_site_acr$total_n ~ juv_cont_adult_sa_nut_site_acr$total_a)
+juv_cont_adult_sa_nut_lm_acr <- lm(data = juv_cont_adult_sa_nut_site_acr, total_n ~ total_a  )
+summary(juv_cont_adult_sa_nut_lm_acr)
+
+plot(juv_cont_adult_sa_nut_lm_acr)
+
+avPlots(juv_cont_adult_sa_nut_lm_acr)
+
+##poc 
+juv_cont_adult_sa_nut_site_poc <- juv_cont_adult_sa_nut_site %>% 
+  filter(genus == "poc") 
+## model
+juv_cont_adult_sa_nut_lm_poc <- lm(data = juv_cont_adult_sa_nut_site_poc, total_n ~ pocillopora +  acropora  + macroalgae + percent_n)
+
+summary(juv_cont_adult_sa_nut_lm_poc)
+
+avPlots(juv_cont_adult_sa_nut_lm_poc)
+
+
+###looking at the poc recruits vs acropora recruits 
+
+```
+
+## Looking at nutrient data
+
+```{r read in nutrient data}
+## cleaning up data
+nutrients<- read.csv("nutrients_2021.csv") %>% 
+  clean_names()
+
+nutrient_my_sites <- nutrients %>% 
+  filter(site_number %in% c("120","124", "134", "136", "143", "149", "154", "157", "183", "185", "186", "171", "173")) %>% 
+  mutate(site = site_number) 
+  
+```
+
+### wrangle 
+```{r nutrients}
+
+## NUTRIENTS with avg n of juv and contact percents
+
+juv_contact_join
+
+## want to add bommie data and adults 
+juv_nut_cont <- full_join(juv_contact_join, nutrient_my_sites, by = "site")
+
+plot(juv_nut_cont$c_to_n_ratio ~ juv_nut_cont$avg_n)
+
+ggplot(data = juv_nut_cont, aes(y = c_to_n_ratio , x = avg_n)) + 
+  geom_point() +
+  geom_smooth(method='lm')
+
+juv_nut_cont_lm <-lm(data = juv_nut_cont, total_n ~ percent_n + turf )
+summary(juv_nut_cont_lm)
+plot(juv_nut_cont_lm)
+
+## look at just acropora 
+juv_nut_cont_acr_lm <-juv_nut_cont %>% 
+  filter(genus == "acr")
+
+```
+
+## joining all data at site level 
+
+```{r}
+juv_cont_adult_sa_nut_site_sites <- ## juv,adults,bommie,contact, and nutrient data here
+juv_cont_adult_sa_nut_site %>% 
+  filter(site %in% c("171","134","152","183","157","147","124","185","186","154"))
+
+```
+
+```{r}
+## Adding juvenile and contact data to adult data - think about incoorporationg size bins for adults here
+juv_cont_adult_site <- full_join(juv_contact_join, avg_adults, by = c("site", "genus"))
+
+## add bommie data to above table 
+juv_cont_adult_sa_site <- full_join(total_sa_site, juv_cont_adult_site, by = c("site"))
+
+## add nutrients
+juv_cont_adult_sa_nut_site <- full_join(juv_cont_adult_sa_site, nutrient_my_sites, by = c("site")) %>% 
+  select(-coral_sampler , - date, - sample_id, -percent_c, - percent_h, c_to_n_ratio)
+
+```
+
+## Exploring means data 
+```{r}
+
+juv_cont_adult_sa_site_acr<- juv_cont_adult_sa_site %>% 
+  filter(genus == "acr")
+ # filter(site %in% c("171", "183", "147", "152", "157", "134"))
+
+### number of juveniles to adults - interesting - need to explore more
+plot(juv_cont_adult_sa_site_acr$avg_n ~ juv_cont_adult_sa_site_acr$avg_a )
+
+## decline as expected 
+plot(juv_cont_adult_sa_site_acr$avg_n ~ juv_cont_adult_sa_site_acr$dead_coral)
+
+## decline as expected 
+plot(juv_cont_adult_sa_site_acr$avg_n ~ juv_cont_adult_sa_site_acr$macroalgae)
+
+#decline as expected
+plot(juv_cont_adult_sa_site_acr$avg_n ~ juv_cont_adult_sa_site_acr$turf)
+
+```
+
+
+```{r top juvenile sites}
+### Top 5 locations with recruits 183, 147, 134, 171, 152
+
+#plot(avg_juv$avg_n ~ nutrient_my_sites$percent_n)
+
+## join with juvenile data 
+
+nut_juv <- nutrients %>%  
+  filter(site_number %in% c("183", "147", "171", "134", "157")) %>% 
+  select( -sample_id, -coral_sampler, -date, -weight_ug)
+
+ggplot(data =nut_juv, aes(x = site_number , y = percent_n)) +
+  geom_boxplot() + 
+  theme_classic()
+```
+
+
+## Bommie data 
+
+```{r read in bommie data}
+#### read in bommie data 
+bom<- read.csv(here("bommie_data.csv"))
+```
+
+### wrangle
+```{r bommie data}
+bom$site <- as.character(bom$site)
+bom$plot <- as.character(bom$plot)
+  
+### create df to calculate surface area 
+bom_clean <-  bom %>% 
+  filter(site != "167") %>% 
+  transform(width_cm = as.numeric(width_cm)) %>% 
+  mutate(radius = case_when(
+    in_plot == "y" ~ width_cm/2 ,
+    in_plot == "n" ~ width_cm)
+  )  %>% 
+  mutate(surface_area = (4*pi*(radius^2))/2)
+
+### total curface area of entire plot 
+total_sa_plot <- bom_clean %>% 
+  group_by(site,plot) %>% 
+  summarize(total_sa = sum(surface_area, na.rm = TRUE),
+           
+            se_b = std.error(surface_area, na.rm=TRUE)) %>% 
+  drop_na(se_b)
+
+
+## total surface area of entire site surveyed 
+total_sa_site <- total_sa_plot %>%  
+  group_by(site) %>%
+  summarize(total_sa_site = sum(total_sa, na.rm=TRUE),
+            avg_sa_site = mean(total_sa, na.rm=TRUE ),
+            se_b = std.error(total_sa))
+
+### Combine sa at each plot for each site with juveniles
+# juv_bom_plot <- full_join(num_juveniles, total_sa_plot) %>% 
+#   group_by(site) %>%
+#   summarize(total_sa_site = sum(total_sa, na.rm=TRUE),
+#             avg_sa_site = mean(total_sa, na.rm=TRUE ),
+#             se_sa = std.error(total_sa, na.rm=TRUE),
+#             avg_n_juv = mean(n_juv, na.rm = TRUE),
+#             total_n = sum(n_juv, na.rm = TRUE),
+#             se_juv = std.error(n_juv, na.rm = TRUE)) %>% 
+#   mutate(total_sa_site = log(total_sa_site),
+#          avg_sa_site = log(avg_sa_site),
+#             se_sa = log(se_sa))
+
+# ggplot(data = juv_bom_plot, aes(x = site, y = avg_sa_site)) + 
+#   geom_col()+
+#   scale_fill_manual(values = c("darkseagreen3", "cadetblue3"))+
+#   geom_line(aes(x = site, y =avg_n_juv)) + 
+#    scale_x_discrete(breaks = c("120","124", "134", "136", "143", "149", "154", "157", "183", "167", "185", "186", "171", "173"))+
+#   theme_classic()
+
+# ggplot(data = juv_bom_plot, aes(y= avg_sa_site, x = avg_n_juv)) + 
+#   geom_point()
+```
+
+### looking at corals on bommies
+```{r bommie data}
+bommie_locations <- size_bins %>% 
+  #filter(longest <= 3)%>% 
+  filter(site != "167") %>% 
+ # filter(genus == "acr") %>% 
+  filter(b_location %in% c("side", "top", "inside", "under")) %>% 
+  select(-species, -length, -width, -lat , -long)
+
+
+ggplot(data = bommie_locations, aes(x = b_location)) + 
+  geom_bar(aes(fill = genus),color = "black") + 
+  facet_wrap(~ genus) + 
+  scale_fill_manual(values = c("darkseagreen3", "cadetblue3")) +
+  theme_classic() + 
+  labs(x = "location", 
+       y = expression(Abundance~of~Corals~Across ~Northshore))
+
+
+### on average where are the corals across sites 
+
+bommie_locations_site <- bommie_locations %>% 
+  group_by(genus, b_location, site, plot) %>% 
+  summarize(total_loc = n()) %>% 
+  group_by(site,genus,b_location) %>% 
+  summarize(mean_loc = mean(total_loc), 
+            se = std.error(total_loc))
+
+
+ggplot(data = bommie_locations_site, aes(x = site, y= mean_loc, group = genus)) + 
+  geom_col(aes(fill = genus, group = genus),color = "black") + 
+  scale_fill_manual(values = c("darkseagreen3", "cadetblue3")) +
+  # geom_errorbar(aes(ymin = mean_loc - se, ymax = mean_loc + se,
+  #                    width = .01 ,
+  #                    group = genus))+
+   theme_classic() + 
+  facet_wrap(~b_location) + 
+  theme(axis.text.x = element_text(angle = -80))+
+  labs(x = "location", 
+       y = expression(Abundance~of~Corals~Across ~Northshore))
+
+
+```
+
+### need to review - what is this for? 
+```{r bommie data}
+### Combine sa at each plot for each site with adults 
+adults_bom_plot <- full_join(num_adults, total_sa_plot) %>% 
+  group_by(site) %>%
+  summarize(total_sa_site = sum(total_sa, na.rm=TRUE),
+            avg_sa_site = mean(total_sa, na.rm=TRUE ),
+            se_sa = std.error(total_sa, na.rm=TRUE),
+            avg_n_adults = mean(n_adults, na.rm = TRUE),
+            total_a = sum(n_adults, na.rm = TRUE),
+            se_a = std.error(n_adults, na.rm = TRUE)) %>% 
+  mutate(total_sa_site = log(total_sa_site),
+         avg_sa_site = log(avg_sa_site),
+            se_sa = log(se_sa))
+
+ggplot(data = adults_bom_plot, aes(x = site, y = avg_sa_site)) + 
+  geom_col()+
+  scale_fill_manual(values = c("darkseagreen3", "cadetblue3"))+
+  geom_line(aes(x = site, y =avg_n_adults)) + 
+   scale_x_discrete(breaks = c("120","124", "134", "136", "143", "149", "154", "157", "183", "167", "185", "186", "171", "173"))+
+  theme_classic()
+ 
+ggplot(data = adults_bom_plot, aes(y= avg_sa_site, x = avg_n_adults)) + 
+  geom_point()
+
+### seems like sa available doesnt drive juveniles or adults at all 
+
+### Does it impact abundance of corals at all? 
+n_corals <- size_bins %>% 
+  group_by(site, plot) %>%
+  summarize(n_corals = n()) 
+
+corals_bom_plot <- full_join(n_corals, total_sa_plot) %>% 
+  group_by(site) %>%
+  summarize(total_sa_site = sum(total_sa, na.rm=TRUE),
+            avg_sa_site = mean(total_sa, na.rm=TRUE ),
+            se_sa = std.error(total_sa, na.rm=TRUE),
+            avg_n_corals = mean(n_corals),
+            total_c = sum(n_corals),
+            se_c = std.error(n_corals)) %>% 
+  mutate(total_sa_site = log(total_sa_site),
+         avg_sa_site = log(avg_sa_site),
+            se_sa = log(se_sa))
+
+ggplot(data = corals_bom_plot, aes(y= avg_sa_site, x = avg_n_corals)) + 
+  geom_point()
+
+```
+
+```{r plot sa vs recruits vs adults}
+
+plot(y= (total_sa_site$total_sa_site)/100000, x = total_sa_site$site,
+     type = 'b', 
+     lwd = 2, 
+     las = 1,
+     xlab = 'site', ylab = 'surface area', 
+     ylim = c(0,200))
+     #xaxis = c("120","124", "134", "136", "143", "149","131","152", "154", "157", "183", "167", "185", "186", "171", "173"))
+
+lines(x = avg_juv$site, y = avg_juv$total_n, col = 'darkseagreen', lwd = 2, type = 't')
+lines(x = avg_adults$site, y = avg_adults$total_a, col = 'cadetblue', lwd = 2,type = 'b')
+
+###################################
+# 4. legend
+
+legend(x = 50, y = 1, 
+       legend = c('growth', 'harvest' , 'unstable equil.', 'stable equil.'), 
+       lwd = c(2, 2, NaN, NaN), 
+       pch = c(NaN, NaN, 21, 21), 
+       pt.cex = 1.5, 
+       cex = 0.8,
+       pt.bg = c('white', 'white', 'white', 'black'), 
+       col = c('black', 'royalblue2', 'black', 'black'))
+```
+
+## SPATIAL ATTEMPT
+
+```{r first step - coral data as sf}
+#######################
+#Saving my points as a shapefile 
+#########################
+
+## turned coral data into an sf object using GPS 
+coral_sf <- st_as_sf(coral_data, coords = c("long", "lat")) %>% 
+  select(-acr_photo, - notes, -perc_bleach, -date)
+### We need to tell R the coordinate reference system 
+st_crs(coral_sf) <- 4326 # with this coordinate system with the GPS points 
+
+## saves as shp file - alreday done
+#st_write(coral_sf, "coral_sf", driver = "ESRI Shapefile") #creates the shp file
+```
+
+creating spatial data inside plots
+
+```{r creating grid system}
+### Another method 
+### looking at spatial points 
+
+### SF object for plot layout in grid format from main coral set
+coral_plot_sf <- coral_data %>% 
+  mutate(longest = pmax(width, length)) %>% 
+  select(-date, -long, - lat, -species, - width, - length , -garden) %>% 
+  mutate("q_x" = quadrat, 
+         "q_y" = quadrat) %>%  #created x and y coords for within my plots 
+  mutate(q_x = case_when( # really want the "dots" in the middle of the "1m" plots/squares
+    q_x == "1" ~ "0.5",
+    q_x == "2" ~ "0.5",
+    q_x == "3" ~ "0.5",
+    q_x == "4" ~ "0.5",
+    q_x == "5" ~ "0.5", 
+    q_x == "6" ~ "1.5",
+    q_x == "7" ~ "1.5",
+    q_x == "8" ~ "1.5",
+    q_x == "9" ~ "1.5",
+    q_x == "10" ~ "1.5",
+    q_x == "11" ~ "2.5",
+    q_x == "12" ~ "2.5",
+    q_x == "13" ~ "2.5",
+    q_x == "14" ~ "2.5",
+    q_x == "15" ~ "2.5",
+    q_x == "16" ~ "3.5",
+    q_x == "17" ~ "3.5",
+    q_x == "18" ~ "3.5",
+    q_x == "19" ~ "3.5",
+    q_x == "20" ~ "3.5",
+    q_x == "21" ~ "4.5",
+    q_x == "22" ~ "4.5",
+    q_x == "23" ~ "4.5",
+    q_x == "24" ~ "4.5",
+    q_x == "25" ~ "4.5"
+  )) %>% 
+  mutate(q_y = case_when(
+    q_y == "1" ~ "0.5",
+    q_y == "2" ~ "1.5",
+    q_y == "3" ~ "2.5",
+    q_y == "4" ~ "3.5",
+    q_y == "5" ~ "4.5", 
+    q_y == "6" ~ "4.5",
+    q_y == "7" ~ "3.5",
+    q_y == "8" ~ "2.5",
+    q_y == "9" ~ "1.5",
+    q_y == "10" ~ "0.5",
+    q_y == "11" ~ "0.5",
+    q_y == "12" ~ "1.5",
+    q_y == "13" ~ "2.5",
+    q_y == "14" ~ "3.5",
+    q_y == "15" ~ "4.5",
+    q_y == "16" ~ "4.5",
+    q_y == "17" ~ "3.5",
+    q_y == "18" ~ "2.5",
+    q_y == "19" ~ "1.5",
+    q_y == "20" ~ "0.5",
+    q_y == "21" ~ "0.5",
+    q_y == "22" ~ "1.5",
+    q_y == "23" ~ "2.5",
+    q_y == "24" ~ "3.5",
+    q_y == "25" ~ "4.5"
+  ))
+
+
+## turing my grid points to numeric for individual objects
+q_x <- coral_plot_sf$q_x %>% 
+  as.numeric()
+q_y <- coral_plot_sf$q_y %>% 
+  as.numeric()
+```
+
+```{r creating grid system}
+### dont think we need?###
+## using sp package ## From online example 
+firstPoints <- SpatialPoints(coords = cbind(q_x,q_y))
+plot(firstPoints, pch = 19)
+
+shapefile(x = firstPoints, file = "file.shp") #saves shapefile  and uses outofdate package
+euclidDist <- sp::spDists(firstPoints,longlat = FALSE)
+
+gcDist <- spDists(firstPoints, longlat = TRUE) #graph the great circle didstance? 
+plot(gcDist)
+```
+
+```{r}
+## coordinate system npc 
+coral_sf <- st_as_sf(coral_plot_sf, coords = c("q_x", "q_y"))
+#st_crs(coral_sf) <- 
+
+#st_write(coral_sf, "coral_sf", driver = "ESRI Shapefile")
+
+acr_graph <- coral_plot_sf %>% 
+ # mutate(longest = pmax(width, length)) %>% 
+  filter(genus == "acr") %>% 
+  filter( longest <= 3) %>% 
+  filter(site == "171")
+
+#st_crs(coral_sf) <- 4326
+
+ggplot() + 
+  geom_sf(data = acr_graph, aes(size = "longest")) + 
+  scale_x_continuous(breaks = 0:5) +
+  scale_y_continuous(breaks = 0:6)
+  
+
+```
+
+```{r heat map code}
+### heat map code 
+# coral_filtered_sf <- coral_sf %>% 
+#   filter(genus %in% c("acr","poc")) %>% 
+#   mutate(longest = pmax(width, length)) %>% 
+#   group_by(site, genus, plot) %>% #count would count na
+#     summarize(n_corals = n()) %>% 
+#   group_by(site,genus) %>% 
+#   summarize(mean_n = mean(n_corals))
+#             
+# 
+# plot(coral_filtered_sf, aes(size = "longest"))
+```
+
+```{r best attempt with nutrients, coral, and moorea map}
+## want to combine Moorea northshore map with data ? 
+#moorea_kml <- st_read("survey_sites_16.kml")
+moorea_sf <- st_read("moorea_2.kml")
+st_as_sf<-(moorea_sf)
+
+moorea_sf <- st_read("moorea_map_final.kml")
+st_as_sf<-(moorea_sf)
+st_crs(moorea_sf) <- 4326
+
+#as(moorea_kml, "Spatial") -> polygon.jkt
+#st_write(moorea_kml,"moorea", shpt= polygon, driver= "ESRI Shapefile")
+
+# moorea_kml <- read_sf("moorea_2.kml") %>% 
+#   clean_names() %>%
+#   filter(name %in% c("120","124", "134", "136", "143", "149","131","152", "154", "157", "183", "167", "185", "186", "171", "173"))
+
+## Creating SF object of moorea with my sites 
+#moorea_sf<- st_as_sf(moorea_sf, coords = c("longitude", "latitude"))
+plot(st_geometry(moorea_sf))
+
+#   clean_names() %>% 
+#   filter(name %in% c("120","124", "134", "136", "143", "149","131","152", "154", "157", "183", "167", "185", "186", "171", "173"))
+
+#joined moorea polygon with coral data
+coral_sf_join <- coral_sf %>% st_join(moorea_sf, left = TRUE) 
+coral_sf_join <- moorea_sf %>% st_join(coral_sf, left = TRUE)
+## not showing polygon ? 
+plot(st_geometry(coral_sf_join))
+View(coral_sf_join)
+
+
+## number of corals 
+coral_filtered_sf<- coral_sf %>% 
+  filter(genus %in% c("acr","poc")) %>% 
+  group_by(site, genus, plot) %>% #count would count na
+  summarize(n_corals = n()) %>% 
+  group_by(site,genus) %>% 
+  summarize(mean_n = mean(n_corals))
+
+## make nutrients an sf object
+nutrients_sf <- st_as_sf(nutrients, coords = c("lon", "lat")) %>% 
+  select(percent_n, geometry, site_number, c_to_n_ratio) %>% 
+  rename(site = site_number) 
+  
+  nutrients_sf %>% 
+  filter(site %in% c("120","124", "134", "136", "143", "149","131","152", "154", "157", "183", "167", "185", "186", "171", "173"))
+
+st_crs(nutrients_sf) <- 4326
+
+#join nutrient data with moorea map
+coral_moorea_sf <- coral_filtered_sf %>% 
+  st_join(moorea_sf) 
+
+plot(st_geometry(nutrients))
+
+#check 
+#plot(coral_sf_join)
+
+ggplot() +
+  #geom_sf(data = moorea_sf, fill = "white") +
+  geom_sf(data = moorea_sf) +
+  geom_sf(data = nutrients_sf, aes(geometry = geometry, fill = percent_n) , color = "black")+
+  scale_fill_gradientn(colors = c("darkgrey","purple4","cadetblue3", "white")) +
+  geom_sf(data = coral_moorea_sf, aes(size = mean_n), color = "darkseagreen") +
+  coord_sf()+
+  theme_void()
+
+# ggplot() +
+#   geom_sf( data = coral_nutrient, aes(y = mean_n) + 
+#   geom_sf( data = coral_nutrient, aes(fill = percent_n),  size = 0.1) +
+#   scale_fill_gradientn(colors = c("lightgrey","cadetblue3","purple4")) +
+#   theme_minimal() 
+#   #labs(fill = "") # name the legend 
+```
+
+```{r spatial map}
+#For spatial map 
+
+coral_sf <- coral_clean %>% 
+  drop_na(lat, long) %>% 
+st_as_sf(coords= c('long' , 'lat')) %>% 
+  filter(site %in% c("120","124", "134", "136", "143", "149", "154", "157", "183", "167", "185", "186", "171", "173"))
+
+## Does the same as above I think but this uses the KML file
+moorea_sf <- read_sf("survey_sites_16.kml") %>% 
+  clean_names() %>% 
+  filter(name %in% c("120","124", "134", "136", "143", "149","131","152", "154", "157", "183", "167", "185", "186", "171", "173"))
+
+### We need to tell R the coordinate reference system 
+st_crs(coral_sf) <- 4326
+
+ggplot(data = coral_sf) + 
+  geom_sf(color = "darkgreen") + 
+  theme_minimal()
+
+
+### Now need to add the map to the spatial points 
+
+
+
+# ggplot() +
+#   geom_sf(data = coral_sf, 
+#           aes(fill = name),
+#           color = NA) +
+#   theme_minimal() +
+#   scale_fill_paletteer_d(palette = "ggthemes::manyeys") +
+#   labs(x = "Longitude",
+#        y = "Latitude",
+#        fill = "Dominant vegetation:",
+#        title = "Jornada Basin vegetation",
+#        caption = "Data source: Jornada Basin LTER") +
+#   theme(legend.position = "right",
+#         plot.title.position = "plot",
+#         plot.caption.position = "plot",
+#         plot.caption = element_text(face = "italic", color = "gray30"),
+#         axis.text = element_text(size = 5))
+```
